@@ -1,0 +1,62 @@
+name: Post AI Short
+
+on:
+  schedule:
+    # 5 Shorts a day, timed for US viewers (times are UTC)
+    # 13:07 UTC = 8:07am New York  / 6:07pm Pakistan
+    # 16:07 UTC = 11:07am New York / 9:07pm Pakistan
+    # 19:07 UTC = 2:07pm New York  / 12:07am Pakistan
+    # 23:07 UTC = 6:07pm New York  / 4:07am Pakistan
+    # 02:07 UTC = 9:07pm New York  / 7:07am Pakistan
+    - cron: "7 13 * * *"
+    - cron: "7 16 * * *"
+    - cron: "7 19 * * *"
+    - cron: "7 23 * * *"
+    - cron: "7 2 * * *"
+  workflow_dispatch:
+    inputs:
+      privacy:
+        description: "public, unlisted or private"
+        default: "public"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: post-short
+  cancel-in-progress: false
+
+jobs:
+  short:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          pip install -q -r requirements.txt
+
+      - name: Make and post the Short
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          MAKE_WEBHOOK_URL: ${{ secrets.MAKE_WEBHOOK_URL }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          YT_PRIVACY: ${{ github.event.inputs.privacy || 'public' }}
+        run: python bot/make_short.py
+
+      - name: Save history
+        if: success()
+        run: |
+          git config user.name "shorts-bot"
+          git config user.email "shorts-bot@users.noreply.github.com"
+          git add history.json
+          git commit -m "Posted Short $(date -u +%Y-%m-%dT%H:%M)" || echo "nothing to commit"
+          git push
