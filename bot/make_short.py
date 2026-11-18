@@ -93,7 +93,7 @@ Return JSON with exactly these keys:
         for attempt in range(3):
             r = requests.post(
                 url,
-                params={"key": key},
+                headers={"x-goog-api-key": key},
                 json={
                     "contents": [{"parts": [{"text": prompt}]}],
                     "generationConfig": {"responseMimeType": "application/json", "temperature": 1.0},
@@ -151,6 +151,56 @@ def duration(path):
 
 
 # ---------------------------------------------------------------- 3. footage
+def download(url, path):
+    with requests.get(url, stream=True, timeout=120) as dl:
+        dl.raise_for_status()
+        with open(path, "wb") as f:
+            for part in dl.iter_content(1 << 20):
+                f.write(part)
+
+
+def pixabay_clips(queries, workdir, need_seconds):
+    key = os.environ["PIXABAY_API_KEY"]
+    clips, used = [], set()
+    total = 0.0
+    for q in queries + ["technology", "city night", "smartphone", "data", "computer code"]:
+        if total >= need_seconds + 2:
+            break
+        r = requests.get(
+            "https://pixabay.com/api/videos/",
+            params={"key": key, "q": q[:100], "per_page": 20, "safesearch": "true"},
+            timeout=30,
+        )
+        if r.status_code != 200:
+            log(f"Pixabay '{q}' -> {r.status_code}")
+            continue
+        hits = [h for h in r.json().get("hits", []) if h["id"] not in used and h.get("duration", 0) >= 4]
+        if not hits:
+            continue
+        # prefer vertical clips, then anything (landscape gets centre-cropped)
+        vertical = [h for h in hits if h["videos"]["medium"].get("height", 0) > h["videos"]["medium"].get("width", 1)]
+        h = random.choice((vertical or hits)[:6])
+        used.add(h["id"])
+        vids = h["videos"]
+        src = next((vids[s]["url"] for s in ("large", "medium", "small") if vids.get(s, {}).get("url")), None)
+        if not src:
+            continue
+        path = workdir / f"clip{len(clips)}.mp4"
+        download(src, path)
+        clips.append(path)
+        total += min(h["duration"], 8)
+        log(f"Clip '{q}' ({h['duration']}s)")
+    if not clips:
+        raise RuntimeError("No Pixabay clips found")
+    return clips
+
+
+def stock_clips(queries, workdir, need_seconds):
+    if os.environ.get("PIXABAY_API_KEY"):
+        return pixabay_clips(queries, workdir, need_seconds)
+    return pexels_clips(queries, workdir, need_seconds)
+
+
 def pexels_clips(queries, workdir, need_seconds):
     key = os.environ["PEXELS_API_KEY"]
     clips, used = [], set()
@@ -297,7 +347,7 @@ def full_description(meta):
     return (
         f"{meta['description']}\n\n"
         "Follow for daily Shorts on AI, privacy and your digital footprint.\n\n"
-        "Voiceover is AI-generated. Stock footage: Pexels.\n\n"
+        "Voiceover is AI-generated. Stock footage: Pixabay.\n\n"
         f"{tags}"
     )
 
@@ -346,7 +396,7 @@ def main():
         meta = gemini_script(history)
         audio = work / "voice.mp3"
         words = make_voice(meta["script"], audio)
-        clips = pexels_clips(meta.get("footage", []), work, duration(audio))
+        clips = stock_clips(meta.get("footage", []), work, duration(audio))
 
     ass = work / "captions.ass"
     write_captions(words, ass)
