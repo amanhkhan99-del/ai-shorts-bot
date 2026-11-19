@@ -88,33 +88,46 @@ Return JSON with exactly these keys:
   (e.g. "smartphone at night", "security camera", "data center servers")."""
     models = gemini_models(key)
     log(f"Gemini models to try: {models}")
-    last = None
     errors = []
-    for model in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        for attempt in range(3):
-            r = requests.post(
-                url,
-                headers={"x-goog-api-key": key},
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"responseMimeType": "application/json", "temperature": 1.0},
-                },
-                timeout=90,
-            )
+    # Two passes over the model list: busy/slow models are skipped right away,
+    # and the whole list is tried once more after a short pause.
+    for round_no in range(2):
+        for model in models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            try:
+                r = requests.post(
+                    url,
+                    headers={"x-goog-api-key": key},
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {"responseMimeType": "application/json", "temperature": 1.0},
+                    },
+                    timeout=60,
+                )
+            except requests.RequestException as e:
+                msg = f"{model}: no response ({type(e).__name__})"
+                log(f"Gemini {msg} - trying next model")
+                errors.append(msg)
+                continue
             if r.status_code == 200:
-                text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-                data = json.loads(text)
+                try:
+                    text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    data = json.loads(text)
+                    assert data.get("title") and data.get("script")
+                except Exception as e:
+                    msg = f"{model}: bad reply ({e})"
+                    log(f"Gemini {msg} - trying next model")
+                    errors.append(msg)
+                    continue
                 data["theme"] = theme
                 log(f"Script written with {model}: {data['title']}")
                 return data
-            last = f"{model}: {r.status_code} {r.text[:300]}"
-            log(f"Gemini {last}")
-            if r.status_code in (500, 503) or (r.status_code == 429 and attempt == 0):
-                time.sleep(15 * (attempt + 1))
-                continue
-            break
-        errors.append(last)
+            msg = f"{model}: {r.status_code} {r.text[:200]}"
+            log(f"Gemini {msg.splitlines()[0]} - trying next model")
+            errors.append(msg)
+        if round_no == 0:
+            log("All models busy, waiting 30s and trying again")
+            time.sleep(30)
     raise RuntimeError("Gemini failed on every model:\n" + "\n".join(errors))
 
 
