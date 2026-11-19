@@ -86,9 +86,11 @@ Return JSON with exactly these keys:
 "hashtags": list of 3-5 hashtags starting with #, always include #Shorts,
 "footage": list of 6 short English search terms for vertical stock video that match the script in order
   (e.g. "smartphone at night", "security camera", "data center servers")."""
-    models = [os.environ.get("GEMINI_MODEL", "gemini-flash-latest"), "gemini-2.5-flash", "gemini-2.0-flash"]
+    models = gemini_models(key)
+    log(f"Gemini models to try: {models}")
     last = None
-    for model in dict.fromkeys(models):
+    errors = []
+    for model in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         for attempt in range(3):
             r = requests.post(
@@ -107,11 +109,48 @@ Return JSON with exactly these keys:
                 log(f"Script written with {model}: {data['title']}")
                 return data
             last = f"{model}: {r.status_code} {r.text[:300]}"
-            if r.status_code in (429, 500, 503):
-                time.sleep(20 * (attempt + 1))
+            log(f"Gemini {last}")
+            if r.status_code in (500, 503) or (r.status_code == 429 and attempt == 0):
+                time.sleep(15 * (attempt + 1))
                 continue
             break
-    raise RuntimeError(f"Gemini failed: {last}")
+        errors.append(last)
+    raise RuntimeError("Gemini failed on every model:\n" + "\n".join(errors))
+
+
+def gemini_models(key):
+    """Ask Google which models this key can use and pick the best 'flash' text models,
+    so the bot keeps working when Google retires old model names."""
+    preferred = os.environ.get("GEMINI_MODEL")
+    found = []
+    try:
+        r = requests.get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            headers={"x-goog-api-key": key}, params={"pageSize": 200}, timeout=30,
+        )
+        r.raise_for_status()
+        for m in r.json().get("models", []):
+            name = m["name"].split("/", 1)[-1]
+            if "generateContent" not in m.get("supportedGenerationMethods", []):
+                continue
+            if "flash" not in name or any(x in name for x in ("image", "tts", "live", "audio", "embed", "thinking")):
+                continue
+            found.append(name)
+    except Exception as e:
+        log(f"Could not list Gemini models: {e}")
+
+    def rank(name):
+        nums = [float(n) for n in re.findall(r"\d+(?:\.\d+)?", name)] or [0]
+        return (
+            "preview" in name or "exp" in name,  # stable first
+            "lite" in name,                      # full flash before lite
+            -nums[0],                            # newest version first
+            name,
+        )
+
+    found.sort(key=rank)
+    ordered = ([preferred] if preferred else []) + found + ["gemini-flash-latest", "gemini-flash-lite-latest"]
+    return list(dict.fromkeys(ordered))[:6]
 
 
 # ---------------------------------------------------------------- 2. voice
