@@ -37,11 +37,25 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install tools
+      - name: Install video tools (fast)
+        id: ffmpeg
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: FedericoCarboni/setup-ffmpeg@v3
+
+      - name: Install video tools (backup)
+        if: steps.ffmpeg.outcome != 'success'
+        timeout-minutes: 10
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          sudo apt-get install -y -qq --no-install-recommends ffmpeg || \
+            (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg)
+
+      - name: Install Python packages
+        timeout-minutes: 5
+        run: |
           pip install -q -r requirements.txt
+          ffmpeg -version | head -1
+          ls /usr/share/fonts/truetype/dejavu/ | head -3 || true
 
       - name: Make and post the Short
         env:
