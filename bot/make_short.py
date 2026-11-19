@@ -357,14 +357,43 @@ def build_video(clips, audio, ass_path, out_path, workdir):
     joined = workdir / "joined.mp4"
     ffmpeg("-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", joined)
     ass_arg = ass_path.as_posix().replace(":", "\\:")
+    vf = f"ass='{ass_arg}'"
+    for d in ("/usr/share/fonts/truetype/dejavu", "/usr/share/fonts"):
+        if Path(d).is_dir():
+            vf += f":fontsdir='{d}'"
+            break
     ffmpeg(
         "-i", joined, "-i", audio,
-        "-vf", f"ass='{ass_arg}'",
+        "-vf", vf,
         "-map", "0:v", "-map", "1:a", "-t", f"{total:.2f}",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out_path,
     )
-    log(f"Video ready: {out_path.name} ({duration(out_path):.1f}s)")
+    log(f"Video ready: {out_path.name} ({duration(out_path):.1f}s, {out_path.stat().st_size / 1e6:.1f} MB)")
+
+
+def fit_size(video, workdir):
+    """Make's free plan only accepts files up to 5 MB. If the Short is bigger than
+    MAX_MB (default 4.7), re-encode it at 720x1280 with a bitrate that fits.
+    After upgrading Make, set the MAX_MB repository variable to e.g. 95."""
+    max_mb = float(os.environ.get("MAX_MB") or 4.7)
+    size_mb = video.stat().st_size / 1e6
+    if size_mb <= max_mb:
+        return video
+    secs = duration(video)
+    audio_k = 64
+    video_k = int(max_mb * 8000 * 0.94 / secs) - audio_k
+    small = video.with_name(video.stem + "_small.mp4")
+    passlog = workdir / "pass"
+    common = ["-i", video, "-vf", "scale=720:1280:flags=lanczos", "-c:v", "libx264", "-preset", "medium",
+              "-b:v", f"{video_k}k", "-maxrate", f"{int(video_k * 1.3)}k", "-bufsize", f"{video_k * 2}k",
+              "-pix_fmt", "yuv420p", "-passlogfile", passlog]
+    ffmpeg(*common, "-pass", "1", "-an", "-f", "mp4", os.devnull)
+    ffmpeg(*common, "-pass", "2", "-c:a", "aac", "-b:a", f"{audio_k}k", "-movflags", "+faststart", small)
+    log(f"Compressed {size_mb:.1f} MB -> {small.stat().st_size / 1e6:.1f} MB ({video_k} kbps, 720p)")
+    if small.stat().st_size / 1e6 > max_mb + 0.25:
+        raise RuntimeError("Could not compress the Short under the size limit")
+    return small
 
 
 # ---------------------------------------------------------------- 5. publish
@@ -454,6 +483,7 @@ def main():
     write_captions(words, ass)
     video = OUT / f"short_{stamp}.mp4"
     build_video(clips, audio, ass, video, work)
+    video = fit_size(video, work)
     meta["full_description"] = full_description(meta)
 
     if args.dry_run or args.no_publish:
