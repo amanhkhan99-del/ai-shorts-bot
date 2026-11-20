@@ -54,5 +54,12 @@
   "theme": "AI at work: jobs, monitoring and automation",
   "release": "short-20261120-200324",
   "video_url": "https://github.com/amanhkhan99-del/ai-shorts-bot/releases/download/short-20261120-200324/short_20261120_195953_small.mp4"
+ },
+ {
+  "time": "2026-11-20T23:53:32+00:00",
+  "title": "How AI Clones Your Voice in 3 Seconds",
+  "theme": "deepfakes and AI voice cloning",
+  "release": "short-20261120-235328",
+  "video_url": "https://github.com/amanhkhan99-del/ai-shorts-bot/releases/download/short-20261120-235328/short_20261120_235132_small.mp4"
  }
 ]
